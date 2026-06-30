@@ -1,0 +1,43 @@
+// Title: Suspicious OAuth Application Consent Grant
+// MITRE ATT&CK: T1550.001 - Use Alternate Authentication Material: Application
+//               Access Token (see also T1528 - Steal Application Access Token)
+// Data Source: AuditLogs
+// Domain: Identity
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects consent grants to OAuth applications that request high-impact
+// Microsoft Graph scopes (mailbox, files, directory write). Illicit consent
+// grants are a primary cloud-native persistence and data-access vector that
+// survives password resets and MFA.
+
+// False Positive Considerations:
+// - Legitimate onboarding of sanctioned SaaS apps will request broad scopes.
+// - Admin-led app registrations during IT projects are expected.
+// - Microsoft first-party apps may appear with broad permission sets.
+
+// Tuning Notes:
+// - Maintain an allowlist of approved AppId/AppDisplayName values to subtract.
+// - Property names in modifiedProperties can vary by tenant/log version;
+//   validate against your own AuditLogs sample before deploying.
+
+let RiskyScopes = dynamic([
+    "Mail.Read","Mail.ReadWrite","Mail.Send","MailboxSettings.ReadWrite",
+    "Files.ReadWrite.All","Sites.ReadWrite.All","Directory.ReadWrite.All",
+    "Directory.Read.All","User.Read.All","Group.ReadWrite.All",
+    "Application.ReadWrite.All","RoleManagement.ReadWrite.Directory",
+    "full_access_as_user"]);
+AuditLogs
+| where TimeGenerated > ago(7d)
+| where OperationName has "Consent to application" or OperationName has "OAuth2PermissionGrant"
+| where Result == "success"
+| extend Initiator = tostring(InitiatedBy.user.userPrincipalName)
+| extend InitiatorIp = tostring(InitiatedBy.user.ipAddress)
+| extend TargetApp = tostring(TargetResources[0].displayName)
+| mv-expand mp = TargetResources[0].modifiedProperties
+| extend PropName = tostring(mp.displayName), NewVal = tostring(mp.newValue)
+| where PropName has "Permissions" or PropName has "ConsentAction"
+| where NewVal has_any (RiskyScopes)
+| project TimeGenerated, Initiator, InitiatorIp, TargetApp, PropName, GrantedScopes = NewVal
+| order by TimeGenerated desc

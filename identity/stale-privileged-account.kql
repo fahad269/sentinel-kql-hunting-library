@@ -1,0 +1,39 @@
+// Title: Dormant Privileged Account Reactivation
+// MITRE ATT&CK: T1078.004 - Valid Accounts: Cloud Accounts
+// Data Source: SigninLogs
+// Domain: Identity
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects a privileged account signing in successfully after a long period of
+// inactivity. Dormant admin and service accounts are favoured targets because
+// their reactivation rarely triggers attention, yet they retain high privilege.
+
+// False Positive Considerations:
+// - Break-glass / emergency accounts are dormant by design until invoked.
+// - Admins returning from extended leave.
+// - Seasonal or quarterly-use accounts (audit, finance close).
+
+// Tuning Notes:
+// - DormancyThreshold default 30 days; raise for accounts with sparse use.
+// - Supply privileged UPNs via a watchlist named 'PrivilegedAccounts'. If you
+//   have no watchlist, remove the join and scope by UPN pattern instead.
+
+let DormancyThreshold = 30;
+let PrivilegedAccounts = _GetWatchlist('PrivilegedAccounts') | project UserPrincipalName;
+SigninLogs
+| where TimeGenerated > ago(180d)
+| where ResultType == 0
+| where UserPrincipalName in (PrivilegedAccounts)
+| project TimeGenerated, UserPrincipalName, IPAddress, AppDisplayName,
+          City = tostring(LocationDetails.city)
+| order by UserPrincipalName asc, TimeGenerated asc
+| serialize
+| extend PrevUser = prev(UserPrincipalName), PrevSignin = prev(TimeGenerated)
+| extend GapDays = iff(UserPrincipalName == PrevUser,
+                       datetime_diff('day', TimeGenerated, PrevSignin), int(null))
+| where isnotnull(GapDays) and GapDays >= DormancyThreshold
+| project ReactivatedAt = TimeGenerated, UserPrincipalName, GapDays,
+          PreviousSignin = PrevSignin, IPAddress, City, AppDisplayName
+| order by GapDays desc

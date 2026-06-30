@@ -1,0 +1,52 @@
+// Title: Impossible Travel Sign-In Detection
+// MITRE ATT&CK: T1078.004 - Valid Accounts: Cloud Accounts
+// Data Source: SigninLogs
+// Domain: Identity
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects successful sign-ins from a single user originating from two
+// geographic locations within a time window too short to physically travel
+// between them. A common indicator of credential compromise where an attacker
+// authenticates from a region different to the legitimate user's.
+
+// False Positive Considerations:
+// - Corporate VPNs, proxies, and cloud egress points can place a user in a
+//   different apparent location to their physical one.
+// - Mobile carriers occasionally route traffic through gateways in other regions.
+// - Users connecting via a remote desktop / jump host in another country.
+
+// Tuning Notes:
+// - Adjust ImpossibleSpeedKph (default 900, ~commercial jet cruise) to taste.
+// - Exclude known corporate egress ranges via a watchlist join on IPAddress.
+
+let LookbackWindow = 1d;
+let ImpossibleSpeedKph = 900.0;
+let MinDistanceKm = 100.0;
+SigninLogs
+| where TimeGenerated > ago(LookbackWindow)
+| where ResultType == 0
+| extend Lat = toreal(LocationDetails.geoCoordinates.latitude),
+         Lon = toreal(LocationDetails.geoCoordinates.longitude),
+         City = tostring(LocationDetails.city),
+         Country = tostring(LocationDetails.countryOrRegion)
+| where isnotnull(Lat) and isnotnull(Lon)
+| project TimeGenerated, UserPrincipalName, IPAddress, Lat, Lon, City, Country, AppDisplayName
+| order by UserPrincipalName asc, TimeGenerated asc
+| serialize
+| extend PrevUser = prev(UserPrincipalName), PrevTime = prev(TimeGenerated),
+         PrevLat = prev(Lat), PrevLon = prev(Lon), PrevCity = prev(City), PrevIP = prev(IPAddress)
+| where UserPrincipalName == PrevUser and IPAddress != PrevIP
+| extend TimeDeltaHours = datetime_diff('second', TimeGenerated, PrevTime) / 3600.0
+| where TimeDeltaHours > 0
+| extend DistanceKm = 2 * 6371 * asin(sqrt(
+        pow(sin((radians(Lat) - radians(PrevLat)) / 2), 2)
+      + cos(radians(PrevLat)) * cos(radians(Lat))
+      * pow(sin((radians(Lon) - radians(PrevLon)) / 2), 2)))
+| extend RequiredSpeedKph = DistanceKm / TimeDeltaHours
+| where DistanceKm > MinDistanceKm and RequiredSpeedKph > ImpossibleSpeedKph
+| project TimeGenerated, UserPrincipalName, PrevCity, City,
+          DistanceKm = round(DistanceKm, 1), TimeDeltaHours = round(TimeDeltaHours, 2),
+          RequiredSpeedKph = round(RequiredSpeedKph, 0), PrevIP, IPAddress, AppDisplayName
+| order by RequiredSpeedKph desc

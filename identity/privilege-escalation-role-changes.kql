@@ -1,0 +1,40 @@
+// Title: Privilege Escalation via Privileged Role Assignment
+// MITRE ATT&CK: T1098 - Account Manipulation
+// Data Source: AuditLogs
+// Domain: Identity
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects a user being added to a high-privilege Entra ID directory role.
+// Adding an attacker-controlled or compromised account to a privileged role
+// is a direct escalation and persistence step following initial access.
+
+// False Positive Considerations:
+// - Legitimate administrative onboarding or break-glass account activation.
+// - PIM activations during scheduled maintenance windows.
+// - Automated provisioning workflows that assign roles programmatically.
+
+// Tuning Notes:
+// - Extend PrivilegedRoles to match the roles you treat as tier-0.
+// - Cross-reference Initiator against your known admin set; an unexpected
+//   initiator is the strongest signal here.
+
+let PrivilegedRoles = dynamic([
+    "Global Administrator","Privileged Role Administrator",
+    "Privileged Authentication Administrator","Security Administrator",
+    "Application Administrator","Cloud Application Administrator",
+    "User Administrator","Exchange Administrator","SharePoint Administrator",
+    "Hybrid Identity Administrator"]);
+AuditLogs
+| where TimeGenerated > ago(7d)
+| where OperationName has "Add member to role" and Result == "success"
+| extend Initiator = tostring(InitiatedBy.user.userPrincipalName)
+| extend InitiatorIp = tostring(InitiatedBy.user.ipAddress)
+| extend TargetUser = tostring(TargetResources[0].userPrincipalName)
+| mv-expand mp = TargetResources[0].modifiedProperties
+| where tostring(mp.displayName) == "Role.DisplayName"
+| extend RoleName = trim('"', tostring(mp.newValue))
+| where RoleName in (PrivilegedRoles)
+| project TimeGenerated, OperationName, Initiator, InitiatorIp, TargetUser, RoleName
+| order by TimeGenerated desc

@@ -1,0 +1,40 @@
+// Title: Conditional Access Bypass via Legacy Authentication
+// MITRE ATT&CK: T1556.006 - Modify Authentication Process: Multi-Factor
+//               Authentication
+// Data Source: SigninLogs
+// Domain: Identity
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects successful sign-ins over legacy authentication protocols, which do
+// not support modern interactive flows and therefore bypass most Conditional
+// Access and MFA policies. Attackers favour legacy endpoints precisely because
+// they sidestep these controls.
+
+// False Positive Considerations:
+// - Legitimate legacy mail clients or line-of-business apps still using
+//   POP3/IMAP4/SMTP AUTH.
+// - Multifunction devices (scan-to-email) authenticating via SMTP.
+// - Migration tooling temporarily using legacy protocols.
+
+// Tuning Notes:
+// - Once legacy auth is blocked tenant-wide, switch ResultType filter to
+//   surface blocked attempts instead of successes.
+// - Allowlist known service accounts that legitimately require legacy auth.
+
+let LegacyAuthClients = dynamic([
+    "Other clients","IMAP4","POP3","MAPI","SMTP","Authenticated SMTP",
+    "Exchange ActiveSync","Exchange Web Services","AutoDiscover",
+    "Offline Address Book"]);
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where ResultType == 0
+| where ClientAppUsed in (LegacyAuthClients)
+| summarize SuccessfulLegacyAuth = count(),
+            Clients = make_set(ClientAppUsed, 10),
+            Apps = make_set(AppDisplayName, 20),
+            SourceIPs = make_set(IPAddress, 30),
+            Countries = make_set(tostring(LocationDetails.countryOrRegion), 20)
+        by UserPrincipalName
+| order by SuccessfulLegacyAuth desc

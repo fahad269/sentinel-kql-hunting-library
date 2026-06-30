@@ -1,0 +1,41 @@
+// Title: MFA Fatigue / Push-Bombing Pattern
+// MITRE ATT&CK: T1621 - Multi-Factor Authentication Request Generation
+// Data Source: SigninLogs
+// Domain: Identity
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects a burst of denied/failed MFA challenges for a single user followed
+// by a successful authentication in the same window — the signature of an
+// attacker repeatedly pushing MFA prompts until the user approves out of
+// fatigue or by mistake.
+
+// False Positive Considerations:
+// - Users with flaky connectivity may genuinely fail several prompts then succeed.
+// - A user switching devices mid-authentication can generate repeated prompts.
+// - Token-time-skew issues on a device can cause clustered denials.
+
+// Tuning Notes:
+// - DenialThreshold and TimeWindow are the primary knobs; raise the threshold
+//   in noisy tenants. bin() approximates a sliding window — acceptable here.
+// - 500121 is the denial/timeout code; add 50074/50076 if you want to count
+//   prompt issuance rather than explicit denials.
+
+let TimeWindow = 30m;
+let DenialThreshold = 5;
+SigninLogs
+| where TimeGenerated > ago(1d)
+| where ResultType in ("0", "500121")
+| extend IsDenial = ResultType == "500121", IsSuccess = ResultType == "0"
+| summarize DeniedPrompts = countif(IsDenial),
+            Successes = countif(IsSuccess),
+            FirstDenial = minif(TimeGenerated, IsDenial),
+            LastSuccess = maxif(TimeGenerated, IsSuccess),
+            SourceIPs = make_set(IPAddress, 20),
+            Apps = make_set(AppDisplayName, 20)
+        by UserPrincipalName, bin(TimeGenerated, TimeWindow)
+| where DeniedPrompts >= DenialThreshold and Successes > 0 and LastSuccess > FirstDenial
+| project UserPrincipalName, WindowStart = TimeGenerated, DeniedPrompts, Successes,
+          FirstDenial, LastSuccess, SourceIPs, Apps
+| order by DeniedPrompts desc
