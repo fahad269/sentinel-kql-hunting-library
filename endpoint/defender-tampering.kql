@@ -1,0 +1,53 @@
+// Title: Defender / AV Tampering or Disablement Attempt
+// MITRE ATT&CK: T1562.001 - Impair Defenses: Disable or Modify Tools
+// Data Source: DeviceProcessEvents, DeviceRegistryEvents
+// Domain: Endpoint
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects attempts to disable, weaken, or tamper with Microsoft Defender and
+// related protections — via PowerShell preference changes, service control,
+// or registry edits to real-time protection and tamper settings. Disabling
+// endpoint defences is a common precursor to payload execution.
+
+// False Positive Considerations:
+// - IT may legitimately adjust Defender settings during troubleshooting or
+//   software deployment that requires temporary exclusions.
+// - Security software migrations can disable built-in AV intentionally.
+// - Some imaging / build pipelines toggle protection during provisioning.
+
+// Tuning Notes:
+// - Adding exclusion paths (Add-MpPreference -ExclusionPath) is a frequently
+//   abused technique; treat exclusions to user-writable paths as higher risk.
+// - Correlate with the initiating account and whether the change persisted.
+
+let CmdPatterns = dynamic([
+    "Set-MpPreference -DisableRealtimeMonitoring","DisableRealtimeMonitoring $true",
+    "DisableBehaviorMonitoring","DisableIOAVProtection","DisableScriptScanning",
+    "MpPreference -ExclusionPath","MpPreference -ExclusionExtension",
+    "MpPreference -ExclusionProcess","sc stop WinDefend","sc config WinDefend",
+    "net stop WinDefend","Uninstall-WindowsFeature Windows-Defender",
+    "DisableAntiSpyware"]);
+let ProcessSignals =
+    DeviceProcessEvents
+    | where TimeGenerated > ago(7d)
+    | where ProcessCommandLine has_any (CmdPatterns)
+    | project TimeGenerated, DeviceName, AccountName, FileName,
+              InitiatingProcessFileName, Detail = ProcessCommandLine,
+              Signal = "ProcessCommandLine";
+let RegistrySignals =
+    DeviceRegistryEvents
+    | where TimeGenerated > ago(7d)
+    | where ActionType in ("RegistryValueSet","RegistryKeyCreated")
+    | where RegistryKey has @"Microsoft\Windows Defender"
+    | where RegistryValueName has_any (
+        "DisableAntiSpyware","DisableRealtimeMonitoring","DisableBehaviorMonitoring",
+        "DisableOnAccessProtection","TamperProtection","DisableIOAVProtection")
+    | project TimeGenerated, DeviceName, AccountName,
+              FileName = InitiatingProcessFileName,
+              InitiatingProcessFileName,
+              Detail = strcat(RegistryKey, " | ", RegistryValueName, " = ", RegistryValueData),
+              Signal = "RegistryChange";
+union ProcessSignals, RegistrySignals
+| order by TimeGenerated desc

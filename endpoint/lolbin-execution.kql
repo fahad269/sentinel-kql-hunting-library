@@ -1,0 +1,39 @@
+// Title: Living-off-the-Land Binary (LOLBin) Execution
+// MITRE ATT&CK: T1218 - System Binary Proxy Execution
+// Data Source: DeviceProcessEvents
+// Domain: Endpoint
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects execution of legitimate signed Windows binaries that attackers abuse
+// to proxy code execution, download payloads, or bypass application control.
+// Because these binaries ship with Windows and are trusted, their malicious use
+// often evades signature-based controls and warrants behavioural hunting.
+
+// False Positive Considerations:
+// - Several LOLBins have legitimate administrative and software-deployment uses
+//   (e.g. msiexec for installs, regsvr32 for legitimate DLL registration).
+// - Enterprise software distribution tools may invoke these binaries at scale.
+// - Developer and IT tooling can trigger rundll32 / mshta in benign workflows.
+
+// Tuning Notes:
+// - This query keys on suspicious command-line patterns, not mere execution of
+//   the binary. Tune SuspiciousCmdPatterns to your environment.
+// - Baseline normal usage per binary, then exclude known-good parent processes.
+
+let LolBins = dynamic([
+    "mshta.exe","regsvr32.exe","rundll32.exe","certutil.exe","bitsadmin.exe",
+    "wmic.exe","msbuild.exe","installutil.exe","regasm.exe","regsvcs.exe",
+    "cmstp.exe","msiexec.exe","forfiles.exe","pcalua.exe"]);
+let SuspiciousCmdPatterns = dynamic([
+    "http://","https://","-urlcache","-decode","-encodedcommand","javascript:",
+    "vbscript:","scrobj.dll","DownloadFile","Invoke-","FromBase64String",
+    "\\\\","/transfer","comsvcs.dll"]);
+DeviceProcessEvents
+| where TimeGenerated > ago(7d)
+| where FileName in~ (LolBins)
+| where ProcessCommandLine has_any (SuspiciousCmdPatterns)
+| project TimeGenerated, DeviceName, AccountName, FileName,
+          InitiatingProcessFileName, ProcessCommandLine, SHA256
+| order by TimeGenerated desc

@@ -1,0 +1,38 @@
+// Title: Suspicious Process Tree (Parent/Child Anomaly)
+// MITRE ATT&CK: T1059 - Command and Scripting Interpreter
+// Data Source: DeviceProcessEvents
+// Domain: Endpoint
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects productivity and document-handling applications (Office apps, PDF
+// readers, browsers) spawning command interpreters or scripting hosts. This
+// parent/child relationship is a hallmark of malicious macro, exploit, or
+// phishing payload execution, where a document triggers a shell.
+
+// False Positive Considerations:
+// - Some enterprise add-ins and document automation legitimately spawn scripts.
+// - Help-desk or deployment tooling may launch shells from unusual parents.
+// - Legitimate macro-enabled business workbooks may invoke cmd/powershell.
+
+// Tuning Notes:
+// - Expand ParentApps / ChildShells to fit your fleet's software.
+// - Pair with command-line inspection to separate benign automation from
+//   download-and-execute behaviour.
+
+let ParentApps = dynamic([
+    "winword.exe","excel.exe","powerpnt.exe","outlook.exe","onenote.exe",
+    "acrobat.exe","acrord32.exe","mspub.exe","visio.exe"]);
+let ChildShells = dynamic([
+    "cmd.exe","powershell.exe","pwsh.exe","wscript.exe","cscript.exe",
+    "mshta.exe","rundll32.exe","regsvr32.exe","bitsadmin.exe","certutil.exe"]);
+DeviceProcessEvents
+| where TimeGenerated > ago(7d)
+| where InitiatingProcessFileName in~ (ParentApps)
+| where FileName in~ (ChildShells)
+| project TimeGenerated, DeviceName, AccountName,
+          ParentProcess = InitiatingProcessFileName,
+          ChildProcess = FileName, ProcessCommandLine,
+          InitiatingProcessCommandLine
+| order by TimeGenerated desc

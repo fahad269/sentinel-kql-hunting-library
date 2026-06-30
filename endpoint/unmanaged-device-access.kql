@@ -1,0 +1,40 @@
+// Title: Unmanaged / Non-Compliant Device Network Access
+// MITRE ATT&CK: T1199 - Trusted Relationship
+// Data Source: DeviceInfo, DeviceNetworkEvents
+// Domain: Endpoint
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Surfaces network activity originating from devices that are not onboarded to
+// management/EDR or are flagged non-compliant. Unmanaged endpoints are a blind
+// spot: they lack policy enforcement and telemetry, and are a common foothold
+// for attackers operating from BYOD or rogue assets inside a trusted network.
+
+// False Positive Considerations:
+// - Newly provisioned devices may briefly appear before onboarding completes.
+// - Contractor or guest devices may be expected on segmented networks.
+// - IoT / OT and appliances are unmanageable by design and need allowlisting.
+
+// Tuning Notes:
+// - Adjust the OnboardingStatus / device-state logic to match your tenant's
+//   compliance signals (Intune compliance, Defender onboarding).
+// - Scope by sensitive destination ports or subnets to reduce volume.
+
+let UnmanagedDevices =
+    DeviceInfo
+    | where TimeGenerated > ago(7d)
+    | summarize arg_max(TimeGenerated, OnboardingStatus) by DeviceId, DeviceName
+    | where OnboardingStatus != "Onboarded"
+    | distinct DeviceId, DeviceName;
+DeviceNetworkEvents
+| where TimeGenerated > ago(7d)
+| where ActionType == "ConnectionSuccess"
+| where DeviceId in ((UnmanagedDevices | project DeviceId))
+| summarize Connections = count(),
+            RemotePorts = make_set(RemotePort, 50),
+            RemoteIPs = make_set(RemoteIP, 100),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by DeviceId, DeviceName
+| order by Connections desc

@@ -1,0 +1,37 @@
+// Title: Persistence via Scheduled Task Creation
+// MITRE ATT&CK: T1053.005 - Scheduled Task/Job: Scheduled Task
+// Data Source: DeviceProcessEvents
+// Domain: Endpoint
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects creation of scheduled tasks via schtasks.exe or PowerShell cmdlets,
+// focusing on tasks whose actions launch shells, scripts, or content from
+// suspicious paths. Scheduled tasks are a durable, low-noise persistence
+// mechanism that survives reboots and re-establishes attacker access.
+
+// False Positive Considerations:
+// - Software installers and updaters routinely create scheduled tasks.
+// - Legitimate administration and GPO-driven automation create tasks at scale.
+// - Backup, patching, and monitoring agents register recurring tasks.
+
+// Tuning Notes:
+// - The SuspiciousActionPatterns filter is what raises fidelity; without it
+//   this query is very noisy. Tune to your environment.
+// - Consider correlating with the account creating the task — tasks created by
+//   non-admin or service accounts are more interesting.
+
+let SuspiciousActionPatterns = dynamic([
+    "powershell","pwsh","cmd /c","cmd.exe /c","-enc","-encodedcommand",
+    "mshta","rundll32","regsvr32","wscript","cscript","bitsadmin","certutil",
+    "\\appdata\\","\\temp\\","\\programdata\\","\\public\\","http://","https://"]);
+DeviceProcessEvents
+| where TimeGenerated > ago(7d)
+| where (FileName =~ "schtasks.exe" and ProcessCommandLine has "/create")
+     or (FileName in~ ("powershell.exe","pwsh.exe")
+         and ProcessCommandLine has_any ("Register-ScheduledTask","New-ScheduledTask"))
+| where ProcessCommandLine has_any (SuspiciousActionPatterns)
+| project TimeGenerated, DeviceName, AccountName,
+          FileName, InitiatingProcessFileName, ProcessCommandLine
+| order by TimeGenerated desc
