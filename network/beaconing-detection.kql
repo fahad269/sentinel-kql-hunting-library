@@ -1,0 +1,48 @@
+// Title: Beaconing Pattern Detection (Periodic C2-Like Traffic)
+// MITRE ATT&CK: T1071 - Application Layer Protocol
+// Data Source: DeviceNetworkEvents
+// Domain: Network
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects regular, periodic outbound connections from a host to a single remote
+// destination — the rhythmic "check-in" behaviour of command-and-control
+// implants. Low variance in the interval between connections, sustained over
+// many connections, distinguishes beaconing from bursty human traffic.
+
+// False Positive Considerations:
+// - Legitimate agents (telemetry, monitoring, update checks) beacon by design.
+// - NTP, certificate revocation, and heartbeat services are periodic.
+// - Keep-alive connections to SaaS apps can appear strongly periodic.
+
+// Tuning Notes:
+// - MinConnections and the variance/mean ratio are the core knobs. A lower
+//   ratio means more regular (more suspicious). Tune to taste.
+// - Allowlist known telemetry/update destinations; they dominate the results.
+
+let LookbackWindow = 1d;
+let MinConnections = 30;
+let MaxRelativeStdDev = 0.15;
+DeviceNetworkEvents
+| where TimeGenerated > ago(LookbackWindow)
+| where ActionType == "ConnectionSuccess"
+| where isnotempty(RemoteIP)
+| sort by DeviceId asc, RemoteIP asc, RemotePort asc, TimeGenerated asc
+| serialize
+| extend PrevTime = prev(TimeGenerated), PrevDevice = prev(DeviceId),
+         PrevRemote = prev(RemoteIP), PrevPort = prev(RemotePort)
+| where DeviceId == PrevDevice and RemoteIP == PrevRemote and RemotePort == PrevPort
+| extend DeltaSeconds = datetime_diff('second', TimeGenerated, PrevTime)
+| summarize Connections = count(),
+            AvgInterval = avg(DeltaSeconds),
+            StdDevInterval = stdev(DeltaSeconds),
+            Processes = make_set(InitiatingProcessFileName, 10)
+        by DeviceId, DeviceName, RemoteIP, RemotePort
+| where Connections >= MinConnections and AvgInterval > 0
+| extend RelativeStdDev = StdDevInterval / AvgInterval
+| where RelativeStdDev <= MaxRelativeStdDev
+| project DeviceName, RemoteIP, RemotePort, Connections,
+          AvgIntervalSec = round(AvgInterval, 1),
+          RelativeStdDev = round(RelativeStdDev, 3), Processes
+| order by RelativeStdDev asc

@@ -1,0 +1,37 @@
+// Title: Email Forwarding Rule to External Domain (Mailbox Exfil)
+// MITRE ATT&CK: T1114.003 - Email Collection: Email Forwarding Rule
+// Data Source: OfficeActivity
+// Domain: Data Exfiltration
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects creation or modification of inbox rules and mailbox settings that
+// forward or redirect mail to an external address. Auto-forwarding is a classic
+// business-email-compromise persistence and exfiltration technique: it quietly
+// copies a victim's incoming mail to the attacker without further interaction.
+
+// False Positive Considerations:
+// - Users may legitimately forward to a personal address where policy allows.
+// - Delegation and shared-mailbox workflows can create forwarding-like rules.
+// - Migration and integration tooling may set redirection during cutover.
+
+// Tuning Notes:
+// - The strongest signal is forwarding to a domain outside your tenant's
+//   accepted domains. Replace the example internal-domain check below with your
+//   real accepted-domain list (ideally via a watchlist).
+// - Rules that also delete or mark-as-read the forwarded mail are higher risk.
+
+let InternalDomains = dynamic(["yourcompany.com","yourcompany.onmicrosoft.com"]);
+OfficeActivity
+| where TimeGenerated > ago(7d)
+| where Operation in ("New-InboxRule","Set-InboxRule","Set-Mailbox","UpdateInboxRules")
+| extend RuleParams = tostring(Parameters)
+| where RuleParams has_any ("ForwardTo","ForwardAsAttachmentTo","RedirectTo",
+                            "ForwardingSmtpAddress","DeliverToMailboxAndForward")
+| extend ForwardTarget = extract(@"(?i)(?:ForwardTo|RedirectTo|ForwardingSmtpAddress)[""':\s]+([^""'\];,]+@[^""'\];,]+)", 1, RuleParams)
+| where isnotempty(ForwardTarget)
+| extend TargetDomain = tolower(tostring(split(ForwardTarget, "@")[1]))
+| where TargetDomain !in~ (InternalDomains)
+| project TimeGenerated, Operation, UserId, ClientIP, ForwardTarget, TargetDomain, RuleParams
+| order by TimeGenerated desc

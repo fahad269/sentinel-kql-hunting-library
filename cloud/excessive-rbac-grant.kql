@@ -1,0 +1,44 @@
+// Title: Excessive Permission Grant on Azure RBAC Role
+// MITRE ATT&CK: T1098.003 - Account Manipulation: Additional Cloud Roles
+// Data Source: AzureActivity
+// Domain: Cloud
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects assignment of highly privileged Azure RBAC roles (Owner, Contributor,
+// User Access Administrator) at subscription or management-group scope. Granting
+// broad control-plane rights is a direct privilege-escalation and persistence
+// step, and User Access Administrator in particular lets an actor grant itself
+// anything thereafter.
+
+// False Positive Considerations:
+// - Legitimate onboarding of new administrators or platform teams.
+// - Landing-zone and governance automation assigns roles at scale.
+// - Break-glass or emergency access provisioning.
+
+// Tuning Notes:
+// - PrivilegedRoleIds lists the built-in role definition GUIDs treated as
+//   tier-0. Extend with any custom high-privilege roles in your tenant.
+// - High-scope assignments (subscription / management group) are the priority;
+//   resource-group scope is generally lower risk.
+
+let PrivilegedRoleIds = dynamic([
+    "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",  // Owner
+    "b24988ac-6180-42a0-ab88-20f7382dd24c",  // Contributor
+    "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",  // User Access Administrator
+    "f58310d9-a9f6-439a-9e8d-f62e7b41a168",  // Role Based Access Control Administrator
+    "00482a5a-887f-4fb3-b363-3b7fe8e74483"]); // Key Vault Administrator
+AzureActivity
+| where TimeGenerated > ago(7d)
+| where OperationNameValue has "Microsoft.Authorization/roleAssignments/write"
+| where ActivityStatusValue in ("Success","Succeeded","Accepted")
+| extend Props = parse_json(Properties)
+| extend RoleDefId = tostring(split(tostring(Props.requestbody), "roleDefinitionId")[-1])
+| where Props has_any (PrivilegedRoleIds) or RoleDefId has_any (PrivilegedRoleIds)
+| project TimeGenerated, OperationNameValue, Caller, CallerIpAddress,
+          Scope = _ResourceId, ActivityStatusValue, Props
+| order by TimeGenerated desc
+// NOTE: The role definition GUID is embedded in the request body within
+// Properties; exact path varies by event version. Validate against your own
+// AzureActivity sample and pin the extract accordingly.

@@ -1,0 +1,48 @@
+// Title: USB / Removable Media Large File Copy
+// MITRE ATT&CK: T1052.001 - Exfiltration Over Physical Medium: Exfiltration over USB
+// Data Source: DeviceEvents, DeviceFileEvents
+// Domain: Data Exfiltration
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects files being written to removable/USB media at volume, correlating a
+// removable-drive mount with a burst of file-copy activity to that drive.
+// Copying data to USB is a direct exfiltration path that leaves the network
+// entirely and is invisible to network-based controls.
+
+// False Positive Considerations:
+// - Legitimate use: transferring presentations, backups, or media to USB.
+// - Encrypted corporate USB devices used within policy.
+// - Imaging, provisioning, or field-engineering workflows writing to media.
+
+// Tuning Notes:
+// - FileCountThreshold defines "at volume"; baseline normal USB use first.
+// - Requires removable-media auditing to be enabled in your Defender policy. If
+//   DeviceFileEvents lacks a removable-media flag in your tenant, pivot on the
+//   PnP/USB mount events in DeviceEvents and correlate by DeviceId + time.
+
+let LookbackWindow = 7d;
+let TimeWindow = 1h;
+let FileCountThreshold = 50;
+let UsbMounts =
+    DeviceEvents
+    | where TimeGenerated > ago(LookbackWindow)
+    | where ActionType in ("PnpDeviceConnected","UsbDriveMounted","UsbDriveMount")
+    | project MountTime = TimeGenerated, DeviceId, DeviceName,
+              MountDetail = AdditionalFields;
+DeviceFileEvents
+| where TimeGenerated > ago(LookbackWindow)
+| where ActionType == "FileCreated"
+| where isnotempty(FolderPath)
+| where column_ifexists("IsRemovableMedia", false) == true
+     or FolderPath matches regex @"^[D-Zd-z]:\\"   // non-system drive letters
+| summarize FileCount = count(),
+            TotalBytes = sum(tolong(column_ifexists("FileSize", 0))),
+            Files = make_set(FileName, 25),
+            DriveLetters = make_set(substring(FolderPath, 0, 2), 10),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by DeviceId, DeviceName, InitiatingProcessAccountName, bin(TimeGenerated, TimeWindow)
+| where FileCount >= FileCountThreshold
+| order by FileCount desc

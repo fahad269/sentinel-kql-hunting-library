@@ -1,0 +1,40 @@
+// Title: Lateral Movement via SMB / RDP Anomalies
+// MITRE ATT&CK: T1021 - Remote Services (T1021.001 RDP, T1021.002 SMB/Admin Shares)
+// Data Source: DeviceNetworkEvents
+// Domain: Network
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects a single host initiating SMB (445) or RDP (3389) connections to an
+// unusually large number of internal destinations in a short window — the
+// fan-out pattern of an attacker spreading across a network after gaining a
+// foothold. Normal workstations rarely connect to many peers over these ports.
+
+// False Positive Considerations:
+// - Administrative jump hosts and management servers legitimately fan out.
+// - Vulnerability scanners and asset-inventory tools touch many hosts.
+// - Software deployment and backup systems connect broadly over SMB.
+
+// Tuning Notes:
+// - DistinctTargetThreshold is the primary knob; baseline your admin hosts and
+//   allowlist them. Scope RemoteIP to internal (RFC1918) ranges as below.
+// - Splitting RDP and SMB into separate thresholds can improve fidelity.
+
+let LookbackWindow = 1d;
+let DistinctTargetThreshold = 15;
+DeviceNetworkEvents
+| where TimeGenerated > ago(LookbackWindow)
+| where ActionType == "ConnectionSuccess"
+| where RemotePort in (445, 3389)
+| where ipv4_is_private(RemoteIP)
+| summarize DistinctTargets = dcount(RemoteIP),
+            Targets = make_set(RemoteIP, 100),
+            SmbTargets = dcountif(RemoteIP, RemotePort == 445),
+            RdpTargets = dcountif(RemoteIP, RemotePort == 3389),
+            Connections = count(),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by DeviceId, DeviceName, InitiatingProcessAccountName
+| where DistinctTargets >= DistinctTargetThreshold
+| order by DistinctTargets desc

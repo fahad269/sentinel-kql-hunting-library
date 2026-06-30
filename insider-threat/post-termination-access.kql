@@ -1,0 +1,38 @@
+// Title: Post-Resignation / Termination Access Attempt
+// MITRE ATT&CK: T1078 - Valid Accounts
+// Data Source: SigninLogs
+// Domain: Insider Threat
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects sign-in attempts by accounts on a leavers/terminated watchlist. A
+// departing or terminated employee's account attempting to authenticate — even
+// if blocked — is a clear flag for either incomplete deprovisioning or a
+// deliberate attempt to retain access after the relationship has ended.
+
+// False Positive Considerations:
+// - Cached sessions and devices may attempt token refresh after departure.
+// - Shared or service accounts mistakenly placed on the leavers list.
+// - Re-hires or role changes where the same identity is legitimately reused.
+
+// Tuning Notes:
+// - Supply departed identities via a watchlist named 'Leavers' with a
+//   TerminationDate column. The query compares sign-in time to that date.
+// - Both successful AND failed attempts matter here; successes after the
+//   termination date are the highest-severity outcome.
+
+let Leavers = _GetWatchlist('Leavers')
+    | project UserPrincipalName = tolower(tostring(UserPrincipalName)),
+              TerminationDate = todatetime(TerminationDate);
+SigninLogs
+| where TimeGenerated > ago(30d)
+| extend UPN = tolower(UserPrincipalName)
+| join kind=inner Leavers on $left.UPN == $right.UserPrincipalName
+| where TimeGenerated >= TerminationDate
+| extend Outcome = iff(ResultType == 0, "SUCCESS", "FAILED")
+| project TimeGenerated, UserPrincipalName, TerminationDate, Outcome,
+          ResultType, AppDisplayName, IPAddress,
+          City = tostring(LocationDetails.city),
+          Country = tostring(LocationDetails.countryOrRegion)
+| order by Outcome asc, TimeGenerated desc

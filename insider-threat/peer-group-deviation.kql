@@ -1,0 +1,45 @@
+// Title: Access Pattern Deviation from Peer-Group Baseline
+// MITRE ATT&CK: T1078 - Valid Accounts
+// Data Source: SigninLogs
+// Domain: Insider Threat
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Flags users whose volume of distinct applications accessed in a day deviates
+// sharply from their own recent baseline. A sudden broadening of access — a
+// user touching far more systems than they normally do — can indicate account
+// misuse, credential compromise, or an insider exploring beyond their role.
+// This is a behavioural analytic; it has no single clean ATT&CK technique, so
+// it is mapped to T1078 (anomalous use of otherwise-valid accounts).
+
+// False Positive Considerations:
+// - Role changes, new projects, or covering for a colleague broaden access.
+// - Onboarding and training periods show atypical exploration.
+// - Returning from leave can spike same-day activity.
+
+// Tuning Notes:
+// - The series_decompose_anomalies score threshold (default 2.0) controls
+//   sensitivity. Raise it to surface only stronger deviations.
+// - Per-user self-baselining is used here; a true peer-group model would
+//   cluster users by department/role first — extend with a watchlist of peer
+//   groups if you have that mapping.
+
+let LookbackWindow = 21d;
+let BinSize = 1d;
+SigninLogs
+| where TimeGenerated > ago(LookbackWindow)
+| where ResultType == 0
+| make-series DailyApps = dcount(AppDisplayName) default = 0
+    on TimeGenerated step BinSize by UserPrincipalName
+| extend (Anomalies, Score, Baseline) =
+    series_decompose_anomalies(DailyApps, 2.0, -1, 'linefit')
+| mv-expand TimeGenerated to typeof(datetime), DailyApps to typeof(long),
+            Anomalies to typeof(double), Score to typeof(double),
+            Baseline to typeof(double)
+| where Anomalies > 0 and Score > 0
+| where TimeGenerated > ago(2d)   // surface recent anomalies only
+| project AnomalyDay = TimeGenerated, UserPrincipalName,
+          DistinctApps = DailyApps, ExpectedBaseline = round(Baseline, 1),
+          AnomalyScore = round(Score, 2)
+| order by AnomalyScore desc

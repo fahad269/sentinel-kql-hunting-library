@@ -1,0 +1,42 @@
+// Title: Off-Hours Access to Sensitive Resources
+// MITRE ATT&CK: T1078 - Valid Accounts
+// Data Source: SigninLogs
+// Domain: Insider Threat
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects successful sign-ins to sensitive applications occurring outside the
+// user's normal working hours (nights and weekends). Off-hours access to
+// high-value systems can indicate compromised credentials being used in another
+// timezone, or insider activity timed to avoid observation.
+
+// False Positive Considerations:
+// - Shift workers, on-call engineers, and global teams work non-standard hours.
+// - Legitimate overtime around deadlines, month-end, or incidents.
+// - Automated or scheduled tasks running under user context overnight.
+
+// Tuning Notes:
+// - Set BusinessStartHour/BusinessEndHour and the timezone offset to your org.
+//   For a global workforce, baseline each user's own typical hours instead of a
+//   fixed window.
+// - Scope SensitiveApps to the applications that actually warrant this scrutiny.
+
+let BusinessStartHour = 7;   // local
+let BusinessEndHour = 19;    // local
+let TimeZoneOffsetHours = 0; // adjust to your primary timezone (e.g. -5 for EST)
+let SensitiveApps = dynamic([
+    "Azure Portal","Microsoft Azure Management","Privileged Identity Management",
+    "Microsoft Exchange Online","SharePoint Online","Microsoft Graph"]);
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where ResultType == 0
+| where AppDisplayName in (SensitiveApps)
+| extend LocalTime = TimeGenerated + TimeZoneOffsetHours * 1h
+| extend HourOfDay = hourofday(LocalTime), DayOfWeek = dayofweek(LocalTime)
+| where HourOfDay < BusinessStartHour or HourOfDay >= BusinessEndHour
+     or DayOfWeek == 0d or DayOfWeek == 6d   // Sunday or Saturday
+| project TimeGenerated, LocalTime, UserPrincipalName, AppDisplayName,
+          IPAddress, City = tostring(LocationDetails.city),
+          Country = tostring(LocationDetails.countryOrRegion)
+| order by TimeGenerated desc

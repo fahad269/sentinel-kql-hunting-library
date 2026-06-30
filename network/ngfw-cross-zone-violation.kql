@@ -1,0 +1,43 @@
+// Title: NGFW Policy Violation Correlation (Cross-Zone Traffic)
+// MITRE ATT&CK: T1210 - Exploitation of Remote Services
+// Data Source: CommonSecurityLog
+// Domain: Network
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Correlates denied/blocked firewall traffic that crosses security zones,
+// surfacing hosts that repeatedly attempt connections the policy forbids.
+// A burst of cross-zone denials from one source is a strong indicator of
+// network reconnaissance or lateral movement attempts between segments.
+
+// False Positive Considerations:
+// - Misconfigured applications and agents retry blocked destinations on a loop.
+// - Vulnerability scanners and asset-discovery tools generate cross-zone denials.
+// - Legitimate services failing over to an unreachable host can look similar.
+
+// Tuning Notes:
+// - Zone fields are vendor-specific. Palo Alto typically carries source/dest
+//   zone in DeviceCustomString fields; adjust the extends to match your CEF
+//   mapping, or remove them and correlate on subnet instead.
+// - DistinctDestPorts is the fan-out signal; raise the threshold in noisy nets.
+
+let LookbackWindow = 1d;
+let MinDeniedConnections = 20;
+let MinDistinctDestinations = 10;
+CommonSecurityLog
+| where TimeGenerated > ago(LookbackWindow)
+| where DeviceAction in~ ("deny","drop","reset-both","block","denied")
+| extend SrcZone = column_ifexists("DeviceCustomString4", ""),
+         DstZone = column_ifexists("DeviceCustomString5", "")
+| summarize DeniedConnections = count(),
+            DistinctDestinations = dcount(DestinationIP),
+            DistinctDestPorts = dcount(DestinationPort),
+            DestPorts = make_set(DestinationPort, 50),
+            Zones = make_set(strcat(SrcZone, "->", DstZone), 20),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by SourceIP
+| where DeniedConnections >= MinDeniedConnections
+    and DistinctDestinations >= MinDistinctDestinations
+| order by DistinctDestinations desc

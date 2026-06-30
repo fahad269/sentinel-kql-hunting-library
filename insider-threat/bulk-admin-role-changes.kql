@@ -1,0 +1,48 @@
+// Title: Bulk Permission / Role Changes by a Single Admin in a Short Window
+// MITRE ATT&CK: T1098 - Account Manipulation
+// Data Source: AuditLogs
+// Domain: Insider Threat
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects a single administrator making an unusually high number of directory
+// role or membership changes within a short window. A burst of permission
+// changes by one actor can indicate a compromised admin account being used to
+// rapidly grant access, or an insider escalating broadly before exfiltration or
+// departure.
+
+// False Positive Considerations:
+// - Legitimate bulk onboarding/offboarding and reorganisations.
+// - Automated provisioning or governance tools acting under an admin identity.
+// - Group-based access reviews that apply many changes at once.
+
+// Tuning Notes:
+// - ChangeThreshold and TimeWindow are the primary knobs; baseline normal admin
+//   change velocity first. Service/automation accounts usually dominate —
+//   allowlist them so genuine human bursts stand out.
+// - Correlate with whether the admin is acting outside business hours.
+
+let TimeWindow = 1h;
+let ChangeThreshold = 15;
+AuditLogs
+| where TimeGenerated > ago(7d)
+| where Category in ("RoleManagement","UserManagement","GroupManagement")
+| where OperationName has_any (
+    "Add member to role","Remove member from role",
+    "Add member to group","Remove member from group",
+    "Add eligible member to role","Update user")
+| where Result == "success"
+| extend Initiator = tostring(InitiatedBy.user.userPrincipalName)
+| where isnotempty(Initiator)
+| summarize ChangeCount = count(),
+            Operations = make_set(OperationName, 20),
+            Targets = make_set(tostring(TargetResources[0].userPrincipalName), 50),
+            DistinctTargets = dcount(tostring(TargetResources[0].userPrincipalName)),
+            FirstChange = min(TimeGenerated),
+            LastChange = max(TimeGenerated)
+        by Initiator, bin(TimeGenerated, TimeWindow)
+| where ChangeCount >= ChangeThreshold
+| project Initiator, WindowStart = TimeGenerated, ChangeCount, DistinctTargets,
+          Operations, Targets, FirstChange, LastChange
+| order by ChangeCount desc

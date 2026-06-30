@@ -1,0 +1,37 @@
+// Title: Publicly Exposed Storage Account / Container
+// MITRE ATT&CK: T1530 - Data from Cloud Storage
+// Data Source: AzureActivity
+// Domain: Cloud
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects configuration changes that make Azure Storage publicly accessible —
+// enabling blob public access at the account level or altering network rules to
+// allow open access. Publicly exposed storage is a leading cause of cloud data
+// breaches and is frequently the target of opportunistic scanning.
+
+// False Positive Considerations:
+// - Static-website hosting and public-by-design content delivery use public blobs.
+// - Infrastructure-as-code deployments may toggle settings transiently.
+// - Authorised changes during a documented project will look identical.
+
+// Tuning Notes:
+// - This detects the control-plane change, not the data exposure itself.
+//   Correlate Caller against your approved change-makers.
+// - Property names within Properties can vary; validate against your own
+//   AzureActivity sample before relying on the payload match.
+
+AzureActivity
+| where TimeGenerated > ago(7d)
+| where OperationNameValue has_any (
+    "Microsoft.Storage/storageAccounts/write",
+    "Microsoft.Storage/storageAccounts/blobServices/containers/write")
+| where ActivityStatusValue in ("Success","Succeeded","Accepted")
+| extend Props = tostring(Properties)
+| where Props has_any ("allowBlobPublicAccess", "publicAccess", "defaultAction")
+| where Props has_any ('"allowBlobPublicAccess":true', '"publicAccess":"Container"',
+                       '"publicAccess":"Blob"', '"defaultAction":"Allow"')
+| project TimeGenerated, OperationNameValue, Caller, CallerIpAddress,
+          ResourceGroup, Resource, ActivityStatusValue, Props
+| order by TimeGenerated desc

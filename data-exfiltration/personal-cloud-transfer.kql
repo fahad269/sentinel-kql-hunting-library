@@ -1,0 +1,43 @@
+// Title: Unusual Data Transfer to Personal Cloud Storage Domains
+// MITRE ATT&CK: T1567.002 - Exfiltration Over Web Service: Exfiltration to Cloud Storage
+// Data Source: DeviceNetworkEvents
+// Domain: Data Exfiltration
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects endpoints connecting to consumer/personal cloud-storage services that
+// are common exfiltration channels (personal Dropbox, Google Drive, MEGA, WeTransfer,
+// and similar). Uploading corporate data to personal storage is a frequent
+// insider and post-compromise exfiltration path that bypasses email DLP.
+
+// False Positive Considerations:
+// - Some personal cloud domains overlap with sanctioned corporate tenants.
+// - Users may legitimately access personal accounts on corporate devices where
+//   policy permits.
+// - Marketing and design teams legitimately use file-transfer services.
+
+// Tuning Notes:
+// - Refine PersonalCloudDomains to the services your policy actually prohibits,
+//   and exclude your sanctioned corporate tenants explicitly.
+// - DeviceNetworkEvents shows the connection, not bytes; if you have proxy logs
+//   with byte counts, prefer those and threshold on upload volume.
+
+let LookbackWindow = 7d;
+let PersonalCloudDomains = dynamic([
+    "dropbox.com","drive.google.com","docs.google.com","mega.nz","mega.io",
+    "wetransfer.com","mediafire.com","box.com","pcloud.com","sync.com",
+    "icloud.com","sendspace.com","anonfiles.com","gofile.io","filebin.net"]);
+DeviceNetworkEvents
+| where TimeGenerated > ago(LookbackWindow)
+| where ActionType == "ConnectionSuccess"
+| where isnotempty(RemoteUrl)
+| where RemoteUrl has_any (PersonalCloudDomains)
+| summarize Connections = count(),
+            DistinctDomains = dcount(RemoteUrl),
+            Domains = make_set(RemoteUrl, 30),
+            Processes = make_set(InitiatingProcessFileName, 10),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by DeviceName, InitiatingProcessAccountName
+| order by Connections desc

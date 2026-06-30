@@ -1,0 +1,44 @@
+// Title: Anomalous Outbound Connection to Rare / Newly Seen Domain
+// MITRE ATT&CK: T1071.001 - Application Layer Protocol: Web Protocols
+// Data Source: DeviceNetworkEvents
+// Domain: Network
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Identifies outbound connections to remote domains that are rare across the
+// fleet and were not observed during a prior baseline period. First-contact
+// with an unfamiliar domain by only one or two hosts is a common signature of
+// command-and-control check-in or staging infrastructure.
+
+// False Positive Considerations:
+// - Legitimate new SaaS, CDN, or vendor domains appear as "new" on first use.
+// - Software updates and telemetry may contact rotating or regional endpoints.
+// - Developer activity routinely reaches novel package and API hosts.
+
+// Tuning Notes:
+// - BaselineWindow / DetectionWindow define "new". Lengthen the baseline to cut
+//   noise. Subtract an allowlist of known-good domains via a watchlist.
+// - RareHostThreshold limits to domains contacted by few internal hosts.
+
+let BaselineWindow = 14d;
+let DetectionWindow = 1d;
+let RareHostThreshold = 3;
+let KnownDomains =
+    DeviceNetworkEvents
+    | where TimeGenerated between (ago(BaselineWindow) .. ago(DetectionWindow))
+    | where isnotempty(RemoteUrl)
+    | distinct RemoteUrl;
+DeviceNetworkEvents
+| where TimeGenerated > ago(DetectionWindow)
+| where ActionType == "ConnectionSuccess"
+| where isnotempty(RemoteUrl)
+| where RemoteUrl !in (KnownDomains)
+| summarize Connections = count(),
+            DistinctHosts = dcount(DeviceId),
+            Hosts = make_set(DeviceName, 20),
+            InitiatingProcesses = make_set(InitiatingProcessFileName, 20),
+            FirstSeen = min(TimeGenerated)
+        by RemoteUrl
+| where DistinctHosts <= RareHostThreshold
+| order by FirstSeen desc

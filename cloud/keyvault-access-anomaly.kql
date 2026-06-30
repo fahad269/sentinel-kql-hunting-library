@@ -1,0 +1,42 @@
+// Title: Key Vault Access Anomaly
+// MITRE ATT&CK: T1555 - Credentials from Password Stores
+// Data Source: AzureDiagnostics
+// Domain: Cloud
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects unusual access to Azure Key Vault secrets — a single identity reading
+// or listing an abnormally high number of secrets in a short window, or access
+// from a new caller. Key Vault holds the credentials, keys, and certificates
+// that unlock downstream systems, making bulk secret reads a high-value signal.
+
+// False Positive Considerations:
+// - Application startup and deployment legitimately read many secrets at once.
+// - Secret-rotation jobs and CI/CD pipelines enumerate vault contents.
+// - Backup and migration tooling may list and read in bulk.
+
+// Tuning Notes:
+// - BulkReadThreshold is the primary knob; baseline normal app behaviour first.
+//   Most noise comes from service principals, so consider scoping to user
+//   identities or to vaults that should rarely be touched interactively.
+// - Key Vault diagnostic logging must be enabled and routed to this workspace.
+
+let LookbackWindow = 1d;
+let BulkReadThreshold = 25;
+AzureDiagnostics
+| where TimeGenerated > ago(LookbackWindow)
+| where ResourceProvider == "MICROSOFT.KEYVAULT"
+| where OperationName in ("SecretGet","SecretList","KeyGet","KeyList",
+                          "CertificateGet","CertificateList")
+| extend Caller = column_ifexists("identity_claim_upn_s", "")
+| extend Caller = iff(isempty(Caller), column_ifexists("identity_claim_appid_g", ""), Caller)
+| summarize SecretOperations = count(),
+            DistinctObjects = dcount(id_s),
+            Operations = make_set(OperationName, 10),
+            CallerIPs = make_set(CallerIPAddress, 20),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by Resource, Caller
+| where SecretOperations >= BulkReadThreshold
+| order by SecretOperations desc

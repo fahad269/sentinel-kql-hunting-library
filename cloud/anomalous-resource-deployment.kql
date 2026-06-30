@@ -1,0 +1,46 @@
+// Title: Anomalous Azure Resource Deployment (New Region / Unusual Size)
+// MITRE ATT&CK: T1578.002 - Modify Cloud Compute Infrastructure: Create Cloud Instance
+// Data Source: AzureActivity
+// Domain: Cloud
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects virtual-machine or compute deployments in regions not normally used
+// by the subscription, which is a common signature of resource hijacking for
+// cryptomining or attacker infrastructure. Adversaries favour unused regions to
+// avoid drawing the attention of operators watching their primary locations.
+
+// False Positive Considerations:
+// - Legitimate expansion into a new region for latency or compliance reasons.
+// - Disaster-recovery testing and failover exercises spin up remote regions.
+// - Authorised projects piloting workloads in a new location.
+
+// Tuning Notes:
+// - BaselineWindow defines "normal" regions per subscription. Lengthen it for
+//   stability. Add unusual VM SKUs (e.g. GPU/high-core) as a second signal.
+// - Correlate Caller and CallerIpAddress against expected operators.
+
+let BaselineWindow = 30d;
+let DetectionWindow = 1d;
+let KnownRegions =
+    AzureActivity
+    | where TimeGenerated between (ago(BaselineWindow) .. ago(DetectionWindow))
+    | where isnotempty(SubscriptionId) and isnotempty(ResourceGroup)
+    | distinct SubscriptionId, ResourceGroupRegion = tostring(Properties);
+AzureActivity
+| where TimeGenerated > ago(DetectionWindow)
+| where OperationNameValue has "Microsoft.Compute/virtualMachines/write"
+| where ActivityStatusValue in ("Success","Succeeded","Accepted")
+| extend DeployRegion = tostring(parse_json(Properties).region)
+| extend DeployRegion = iff(isempty(DeployRegion), tostring(Authorization), DeployRegion)
+| summarize Deployments = count(),
+            Resources = make_set(Resource, 30),
+            Regions = make_set(DeployRegion, 20),
+            FirstSeen = min(TimeGenerated)
+        by SubscriptionId, Caller, CallerIpAddress
+| order by FirstSeen desc
+// NOTE: Region is not always a first-class column in AzureActivity. Validate
+// where your tenant surfaces deployment region (Properties payload vs a custom
+// field) and pin DeployRegion to that, then filter to regions outside your
+// established baseline set.

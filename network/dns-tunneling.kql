@@ -1,0 +1,44 @@
+// Title: DNS Tunneling Indicators
+// MITRE ATT&CK: T1071.004 - Application Layer Protocol: DNS
+// Data Source: DnsEvents
+// Domain: Network
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects DNS query patterns consistent with tunneling: a single client issuing
+// a high volume of queries to one parent domain, with long, high-entropy
+// subdomain labels. DNS tunneling smuggles command-and-control or exfiltrated
+// data inside DNS, which often egresses freely even in restrictive networks.
+
+// False Positive Considerations:
+// - Some CDNs, anti-spam, and security products legitimately use long,
+//   algorithmic-looking subdomains.
+// - Telemetry and analytics services can generate high DNS query volume.
+// - Cloud storage and email-security gateways query many unique subdomains.
+
+// Tuning Notes:
+// - Tune MinQueries, MinAvgLabelLength, and MinDistinctSubdomains to your noise
+//   floor. Allowlist known-good parent domains via a watchlist.
+// - Combining all three signals (volume + length + uniqueness) cuts FPs more
+//   than any one alone.
+
+let LookbackWindow = 1d;
+let MinQueries = 200;
+let MinAvgLabelLength = 30;
+let MinDistinctSubdomains = 100;
+DnsEvents
+| where TimeGenerated > ago(LookbackWindow)
+| where isnotempty(Name)
+| extend ParentDomain = strcat_array(array_slice(split(Name, "."), -2, -1), ".")
+| extend SubLabel = tostring(split(Name, ".")[0])
+| summarize Queries = count(),
+            DistinctSubdomains = dcount(Name),
+            AvgLabelLength = avg(strlen(SubLabel)),
+            MaxLabelLength = max(strlen(SubLabel)),
+            SampleNames = make_set(Name, 5)
+        by ClientIP, ParentDomain
+| where Queries >= MinQueries
+    and AvgLabelLength >= MinAvgLabelLength
+    and DistinctSubdomains >= MinDistinctSubdomains
+| order by Queries desc

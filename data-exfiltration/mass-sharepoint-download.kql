@@ -1,0 +1,40 @@
+// Title: Mass File Download from SharePoint / OneDrive
+// MITRE ATT&CK: T1213.002 - Data from Information Repositories: SharePoint
+// Data Source: OfficeActivity
+// Domain: Data Exfiltration
+// Author: Muhammad Fahad
+// Last Updated: 2026-06
+
+// Description:
+// Detects a single user downloading or syncing an abnormally large number of
+// files from SharePoint or OneDrive in a short window — a common staging step
+// for data theft, especially around resignation or after account compromise.
+
+// False Positive Considerations:
+// - Initial OneDrive/SharePoint sync on a new device downloads many files.
+// - Legitimate bulk work: migrations, audits, large project handovers.
+// - Backup tooling and eDiscovery exports generate high download counts.
+
+// Tuning Notes:
+// - DownloadThreshold and TimeWindow are the primary knobs; baseline normal
+//   per-user volume first. New-device first-sync is the dominant false positive
+//   — correlate with device/user-agent newness to suppress it.
+// - Consider weighting by total bytes if that field is available to you.
+
+let TimeWindow = 1h;
+let DownloadThreshold = 200;
+OfficeActivity
+| where TimeGenerated > ago(7d)
+| where OfficeWorkload in ("SharePoint","OneDrive")
+| where Operation in ("FileDownloaded","FileSyncDownloadedFull","FileSyncUploadedFull")
+| summarize FileCount = count(),
+            DistinctFiles = dcount(OfficeObjectId),
+            ClientIPs = make_set(ClientIP, 20),
+            UserAgents = make_set(UserAgent, 10),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+        by UserId, bin(TimeGenerated, TimeWindow)
+| where FileCount >= DownloadThreshold
+| project UserId, WindowStart = TimeGenerated, FileCount, DistinctFiles,
+          ClientIPs, UserAgents, FirstSeen, LastSeen
+| order by FileCount desc
